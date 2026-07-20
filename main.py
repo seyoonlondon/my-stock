@@ -2,7 +2,8 @@ import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
 import pandas as pd
-from datetime import datetime, timedelta
+import time
+from datetime import datetime
 
 st.set_page_config(page_title="글로벌 주식 대시보드", layout="wide")
 
@@ -53,6 +54,7 @@ chart_type = st.sidebar.radio("차트 유형", ["라인 차트", "캔들스틱"]
 
 st.sidebar.markdown("---")
 st.sidebar.caption("데이터 출처: Yahoo Finance (yfinance)")
+st.sidebar.info("데이터는 30분 동안 캐시됩니다. Yahoo Finance의 요청 제한(Rate Limit)을 피하기 위함입니다.")
 
 # ----------------------------
 # 메인 타이틀
@@ -64,40 +66,74 @@ if not selected_names:
     st.warning("사이드바에서 하나 이상의 종목을 선택해주세요.")
     st.stop()
 
-# ----------------------------
-# 데이터 가져오기 (캐시 적용)
-# ----------------------------
-@st.cache_data(ttl=600)
-def get_stock_data(ticker, period):
-    df = yf.Ticker(ticker).history(period=period)
-    return df
+selected_tickers = [TICKERS[name] for name in selected_names]
 
-@st.cache_data(ttl=600)
-def get_stock_info(ticker):
-    try:
-        info = yf.Ticker(ticker).fast_info
-        return info
-    except Exception:
-        return None
+# ----------------------------
+# 데이터 가져오기 (배치 요청 + 캐시 30분 + 재시도)
+# ----------------------------
+@st.cache_data(ttl=1800, show_spinner="주가 데이터를 불러오는 중입니다...")
+def get_all_stock_data(tickers, period):
+    """여러 종목을 한 번에 요청해서 Yahoo Finance 호출 횟수를 최소화"""
+    for attempt in range(3):
+        try:
+            data = yf.download(
+                tickers=tickers,
+                period=period,
+                group_by="ticker",
+                auto_adjust=True,
+                threads=True,
+                progress=False,
+            )
+            return data
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(3 * (attempt + 1))  # 3초, 6초 대기 후 재시도
+                continue
+            raise e
+
+# ----------------------------
+# 데이터 로드 (에러 처리 포함)
+# ----------------------------
+try:
+    raw_data = get_all_stock_data(tuple(selected_tickers), period)
+except Exception as e:
+    st.error(
+        "⚠️ Yahoo Finance 서버가 요청을 일시적으로 제한하고 있습니다 (Rate Limit).\n\n"
+        "잠시 후(1~2분) 새로고침 해주세요. 계속 발생하면 종목 수를 줄이거나 "
+        "몇 분 뒤 다시 시도해보세요."
+    )
+    st.stop()
+
+# 종목이 1개면 yf.download가 컬럼 구조를 다르게 반환하므로 보정
+def extract_df(raw_data, ticker, is_single):
+    if is_single:
+        df = raw_data
+    else:
+        if ticker not in raw_data.columns.get_level_values(0):
+            return pd.DataFrame()
+        df = raw_data[ticker]
+    return df.dropna(how="all")
+
+is_single = len(selected_tickers) == 1
+
+summary_data = {}
+for name in selected_names:
+    ticker = TICKERS[name]
+    df = extract_df(raw_data, ticker, is_single)
+    if not df.empty:
+        summary_data[name] = df
+
+if not summary_data:
+    st.error("데이터를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.")
+    st.stop()
 
 # ----------------------------
 # 요약 지표 카드
 # ----------------------------
 st.subheader("📊 현재가 요약")
-cols = st.columns(len(selected_names))
+cols = st.columns(len(summary_data))
 
-summary_data = {}
-
-for i, name in enumerate(selected_names):
-    ticker = TICKERS[name]
-    df = get_stock_data(ticker, period)
-
-    if df.empty:
-        cols[i].metric(label=name, value="데이터 없음")
-        continue
-
-    summary_data[name] = df
-
+for i, (name, df) in enumerate(summary_data.items()):
     last_close = df["Close"].iloc[-1]
     prev_close = df["Close"].iloc[-2] if len(df) > 1 else last_close
     change = last_close - prev_close
@@ -116,11 +152,7 @@ st.markdown("---")
 # ----------------------------
 st.subheader("📈 종목별 차트")
 
-for name in selected_names:
-    if name not in summary_data:
-        continue
-
-    df = summary_data[name]
+for name, df in summary_data.items():
     ticker = TICKERS[name]
 
     with st.expander(f"{name} ({ticker})", expanded=True):
