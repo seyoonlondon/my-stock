@@ -5,7 +5,7 @@ import pandas as pd
 import time
 from datetime import datetime
 
-st.set_page_config(page_title="글로벌 주식 대시보드", layout="wide")
+st.set_page_config(page_title="세유니의 글로벌 주식 대시보드", layout="wide")
 
 # ----------------------------
 # 종목 리스트 (지수 + 주요 개별주)
