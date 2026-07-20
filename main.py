@@ -59,7 +59,7 @@ st.sidebar.info("데이터는 30분 동안 캐시됩니다. Yahoo Finance의 요
 # ----------------------------
 # 메인 타이틀
 # ----------------------------
-st.title("🌍 글로벌 주요 주식 대시보드")
+st.title("🌍 세유니의 글로벌 주요 주식 대시보드")
 st.caption(f"업데이트 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 if not selected_names:
